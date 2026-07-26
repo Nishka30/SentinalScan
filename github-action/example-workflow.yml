@@ -1,0 +1,66 @@
+# Example: score every pull request and comment with the result.
+#
+# Copy this to `.github/workflows/deployment-risk.yml` in the repository you want
+# analyzed, and change `uses:` to point at wherever Sentinel lives.
+
+name: Deployment risk
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # needed to post the comment
+
+jobs:
+  risk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 is REQUIRED, not tidiness. Sentinel's score comes from
+          # commit history — how often each file changed, how often it was fixed,
+          # who has touched it. A shallow clone hides all of that and every file
+          # looks brand new.
+          fetch-depth: 0
+
+      - name: Score the change
+        uses: your-org/sentinel@main # <- point at your copy
+        with:
+          # Comment on every PR, but do not block merges yet. Turn
+          # fail-over-threshold on once the team trusts the number.
+          threshold: "65"
+          fail-over-threshold: "false"
+
+          # Optional plain-English narrative. Off by default so CI stays fast
+          # and needs no third-party API; the score is identical either way.
+          explain: "false"
+          # explain: "true"
+          # nvidia-api-key: ${{ secrets.NVIDIA_API_KEY }}
+# ---------------------------------------------------------------------------
+# Two upgrades worth knowing about
+# ---------------------------------------------------------------------------
+#
+# 1. Train a model on the repository's own history.
+#
+#    Out of the box the score comes from the transparent rule engine. Running
+#    `sentinel train` produces a model calibrated to this codebase, which scores
+#    better (see the evaluation in the README). Training takes minutes, so do it
+#    on a schedule and cache the result rather than on every PR:
+#
+#      - uses: actions/cache@v4
+#        with:
+#          path: .sentinel
+#          key: sentinel-model-${{ github.ref_name }}
+#
+#      - run: sentinel train --max-commits 5000
+#        if: steps.cache.outputs.cache-hit != 'true'
+#
+# 2. Gate merges on the score.
+#
+#    Set fail-over-threshold to "true" and add this job to your branch
+#    protection required checks. Start with a high threshold and lower it as the
+#    team gets used to it — a gate that fires on everything gets ignored, and an
+#    ignored gate is worse than none.

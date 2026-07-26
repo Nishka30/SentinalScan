@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sentinel-risk"
+version = "0.1.0"
+description = "Sentinel — a deployment risk analyzer that learns from a repository's own bug history."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydriller>=2.6",
+    "GitPython>=3.1",
+    "lizard>=1.17",
+    "networkx>=3.2",
+    "lightgbm>=4.3",
+    "shap>=0.45",
+    "openai>=1.30",
+    "pydantic-settings>=2.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+sentinel = "sentinel.cli:app"
+sentinel-mcp = "mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sentinel", "mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# The suite uses plain functions only. Without this, pytest tries to collect
+# production classes like TestIndex and TestSignal and warns about each.
+python_classes = []

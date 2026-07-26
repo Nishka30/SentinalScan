@@ -1,0 +1,161 @@
+name: "Sentinel deployment risk"
+description: >-
+  Score the deployment risk of a pull request from the repository's own bug
+  history, and post the score, reasons and blast radius as a PR comment.
+author: "Sentinel"
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  threshold:
+    description: "Score at or above which the change is considered high risk."
+    required: false
+    default: "65"
+  fail-over-threshold:
+    description: >-
+      Fail the check when the score reaches the threshold. Defaults to false so
+      the action can be adopted as information first and made a gate later.
+    required: false
+    default: "false"
+  base-ref:
+    description: >-
+      Ref the PR is measured against. Defaults to the pull request's base
+      branch, falling back to the repository default branch.
+    required: false
+    default: ""
+  comment:
+    description: "Post (or update) a comment on the pull request."
+    required: false
+    default: "true"
+  explain:
+    description: >-
+      Also ask the configured LLM for a plain-English narrative. Off by default:
+      CI should not depend on a third-party API, and the score is identical
+      either way. Requires nvidia-api-key.
+    required: false
+    default: "false"
+  nvidia-api-key:
+    description: "Passed through to NVIDIA's API when explain is true. Use a secret."
+    required: false
+    default: ""
+  llm-model:
+    description: "Model to use for the narrative."
+    required: false
+    default: "meta/llama-3.3-70b-instruct"
+  python-version:
+    description: "Python used to run Sentinel."
+    required: false
+    default: "3.12"
+  github-token:
+    description: "Token used to post the comment."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  score:
+    description: "Risk score out of 100."
+    value: ${{ steps.analyze.outputs.score }}
+  band:
+    description: "low, medium or high."
+    value: ${{ steps.analyze.outputs.band }}
+  json-path:
+    description: "Path to the full JSON result."
+    value: ${{ steps.analyze.outputs.json-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Sentinel
+      shell: bash
+      # ${{ github.action_path }} is this action's directory inside the checked-out
+      # action repository, so its parent is the package root.
+      run: python -m pip install --quiet "${{ github.action_path }}/.."
+
+    - name: Work out what to compare against
+      id: base
+      shell: bash
+      run: |
+        set -euo pipefail
+        REF="${{ inputs.base-ref }}"
+        if [ -z "$REF" ]; then
+          REF="${{ github.event.pull_request.base.ref }}"
+        fi
+        if [ -z "$REF" ]; then
+          REF="${{ github.event.repository.default_branch }}"
+        fi
+        # Sentinel needs the base commit present locally to find the merge base.
+        git fetch --quiet origin "$REF" --depth=0 2>/dev/null || git fetch --quiet origin "$REF" || true
+        echo "ref=origin/$REF" >> "$GITHUB_OUTPUT"
+        echo "Comparing against origin/$REF"
+
+    - name: Analyze
+      id: analyze
+      shell: bash
+      env:
+        # Only set when explicitly requested; absent means the narrative is
+        # skipped and the analysis is unaffected.
+        NVIDIA_API_KEY: ${{ inputs.explain == 'true' && inputs.nvidia-api-key || '' }}
+        SENTINEL_LLM_MODEL: ${{ inputs.llm-model }}
+      run: |
+        set -euo pipefail
+        ARGS=(scan --repo . --since "${{ steps.base.outputs.ref }}" --json)
+        if [ "${{ inputs.explain }}" = "true" ] && [ -n "${NVIDIA_API_KEY:-}" ]; then
+          ARGS+=(--explain)
+        fi
+        # Never let a failed analysis be read as a passing check.
+        sentinel "${ARGS[@]}" > sentinel-result.json
+        python - <<'PY' >> "$GITHUB_OUTPUT"
+        import json
+        payload = json.load(open("sentinel-result.json"))
+        print(f"score={payload['score']}")
+        print(f"band={payload['band']}")
+        print("json-path=sentinel-result.json")
+        PY
+
+    - name: Build the comment
+      id: comment
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m sentinel.pr_comment sentinel-result.json \
+          --threshold "${{ inputs.threshold }}" \
+          --output sentinel-comment.md > /dev/null
+        echo "Wrote sentinel-comment.md"
+
+    - name: Post the comment
+      if: ${{ inputs.comment == 'true' && github.event.pull_request.number }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        # Update the previous comment rather than adding one per push.
+        EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq 'map(select(.body | contains("<!-- sentinel-deployment-risk -->"))) | .[0].id // empty')
+        if [ -n "$EXISTING" ]; then
+          gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" \
+            -F body=@sentinel-comment.md > /dev/null
+          echo "Updated comment $EXISTING"
+        else
+          gh api --method POST "repos/$REPO/issues/$PR/comments" \
+            -F body=@sentinel-comment.md > /dev/null
+          echo "Posted a new comment"
+        fi
+
+    - name: Enforce the threshold
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m sentinel.pr_comment sentinel-result.json \
+          --threshold "${{ inputs.threshold }}" \
+          ${{ inputs.fail-over-threshold == 'true' && '--fail-over-threshold' || '' }} \
+          > /dev/null

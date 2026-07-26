@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets — never commit the real .env
+.env
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Sentinel's trained model + cached artifacts (regenerate with `sentinel train`)
+.sentinel/
+
+# Local tool state, not project configuration
+.claude/

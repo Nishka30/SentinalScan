@@ -388,8 +388,5 @@ mcp_server/          one MCP tool over stdio
 github-action/       composite action + example workflow
 ```
 
-See [PLAN.md](PLAN.md) for the build plan, phase by phase.
 
-## License
 
-MIT

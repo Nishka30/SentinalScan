@@ -1,478 +1,654 @@
-# Sentinel
+# 🛡️ Sentinel — Deployment Risk Analyzer
 
-**Is this change safe to deploy?** Sentinel answers that from your repository's
-own bug history — not from a language model's opinion.
+[![PyPI version](https://img.shields.io/pypi/v/sentinel-risk.svg?style=flat-square)](https://pypi.org/project/sentinel-risk/)
+[![NPM version](https://img.shields.io/npm/v/sentinel-mcp.svg?style=flat-square)](https://www.npmjs.com/package/sentinel-mcp)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-296%20passing-brightgreen?style=flat-square)]()
+
+> **One question, one answer: is this change safe to deploy?**
+>
+> Sentinel answers from your repository's own bug history — not a language model's guess.
 
 ```
-┌───────── Sentinel — deployment risk ─────────┐
-│   42/100   MEDIUM RISK                       │
-│   1 file(s) — changes since origin/main      │
-│   scored by: trained model (4854 commits)    │
-└──────────────────────────────────────────────┘
+┌─────────── Sentinel — deployment risk ────────────────────────┐
+│   Score: 67/100   ██████████████████░░░░░  HIGH RISK          │
+│   3 file(s) changed — since origin/main                       │
+│   Scored by: trained model (4,854 commits)                    │
+│                                                               │
+│   Top reasons:                                                │
+│    • auth/session.py  — fixed 14 times in the last 2 years   │
+│    • Author has never touched this file before                │
+│    • Change spans 6 folders — high blast radius               │
+│                                                               │
+│   Blast radius: 12 files directly affected, 38 transitively   │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-## The problem
+---
 
-Every team has files everyone is quietly afraid of. The ones that broke
-production twice last year, that only one person understands, that nothing has
-tests for. That knowledge lives in people's heads, so it walks out of the door
-when they do — and it is not in the pull request.
+## Table of Contents
 
-Sentinel reads it out of git. It mines which commits were bug fixes, blames the
-lines those fixes changed to find what introduced the bug, and learns what risky
-changes in *your* codebase look like. Then it scores the change in front of you,
-shows the reasons, and names what else could break.
+- [What Is Sentinel?](#-what-is-sentinel)
+- [How It Works — The Core Pipeline](#-how-it-works--the-core-pipeline)
+- [What Makes It Different](#-what-makes-it-different)
+- [Installation](#-installation)
+- [Quickstart: First Scan in 60 Seconds](#-quickstart-first-scan-in-60-seconds)
+- [Full CLI Reference](#-full-cli-reference)
+- [Enabling AI Explanations](#-enabling-ai-explanations-optional)
+- [Training a Custom Model on Your Repository](#-training-a-custom-model-on-your-repository)
+- [MCP Server — For Claude Desktop & Cursor](#-mcp-server--for-claude-desktop--cursor)
+- [Configuration Reference](#-configuration-reference)
+- [Architecture Overview](#-architecture-overview)
+- [Running Tests](#-running-tests)
+- [Publishing](#-publishing)
+- [Author](#-author)
 
-The score is arithmetic. An LLM is used at the very end, for one call, to phrase
-it in English — and it structurally cannot alter the number.
+---
 
-## Quickstart
+## 🔍 What Is Sentinel?
 
-Requires Python 3.11+ and git.
+Every team has files they are quietly afraid of. The ones that broke production twice last year, that only one person truly understands, that nothing has tests for. You can feel that instinct during code review — but you cannot put a number on it.
+
+Sentinel puts a number on it.
+
+It works by reading your repository's full git history, finding which past commits later had to be *fixed*, tracing those bug-inducing commits using a line-level blame algorithm (called SZZ), and building a lightweight gradient-boosted model trained entirely on your own data. It then uses that model — or its transparent rule engine when no model exists — to score any incoming change on a 0–100 risk scale.
+
+**The score is always deterministic.** A language model can optionally be called to narrate the findings in plain English, but it structurally cannot affect the numeric score. Remove the API key and the score is unchanged — only the paragraph disappears.
+
+---
+
+## ⚙️ How It Works — The Core Pipeline
+
+Sentinel runs in two distinct phases:
+
+### Phase 1 — Training (learn from history)
+
+> Run once per repository with `sentinel train`. The result is a model file saved in `.sentinel/`.
+
+```
+1. Read git log                     → All commits in the configured window (default: 1,500)
+2. Detect bug-fix commits           → Keyword match on commit subjects ("fix", "hotfix", ...)
+3. SZZ blame                        → For each bug fix, blame the deleted lines against the
+                                      parent commit to find which earlier commits introduced it
+4. Label commits                    → Commits identified by blame = 1 (risky), others = 0
+5. Build feature vectors            → 20 features per commit, computed from info available
+                                      *at commit time* (no lookahead)
+6. Train LightGBM with early stop   → Max 300 rounds, stops when held-out AP stops improving
+7. Save model + metadata            → .sentinel/model.txt + .sentinel/model.meta.json
+```
+
+### Phase 2 — Scoring (assess a new change)
+
+> Runs every time you call `sentinel scan`, `sentinel diff`, or the MCP tool.
+
+```
+1. Identify changed files           → git diff vs. base branch (scan) or working tree (diff)
+2. Read file histories              → Bug-fix counts, churn, author ownership per file
+3. Static analysis                  → Cyclomatic complexity via lizard
+4. Build feature vector             → Same 20-feature function used in training
+5. Score                            → Trained model if available; rule engine otherwise
+6. Blast radius                     → networkx dependency graph → direct + transitive impact
+7. Report                           → Rich terminal table, or JSON for CI pipelines
+8. Explain (optional)               → Send risk summary to configured LLM for plain-English narration
+```
+
+---
+
+## 💡 What Makes It Different
+
+| Tool | How it decides risk |
+|---|---|
+| Most linters | Checks style rules — knows nothing about *history* |
+| Code coverage tools | Tells you what is tested — not what has *historically* broken |
+| PR review bots | Often LLM-based — the model is the judge |
+| **Sentinel** | **Trains on your repo's own bug record. The score is a probability from your history, not an opinion.** |
+
+Key design principles baked into the code:
+
+- **No lookahead in training.** Features for a historical commit are built from data available *before* that commit was made. The running history tally is applied *after* featurising, not before.
+- **Relative thresholds.** Eight past bug fixes is remarkable in a new service and unremarkable in a fifteen-year-old library. Sentinel uses the repo's own distribution percentiles as thresholds, not hardcoded absolute numbers.
+- **Blast radius is separate from the score.** The dependency graph tells you *what else can break*. It is computed from today's import graph and shown in the report, but it is deliberately not fed into the model (doing so honestly would require re-parsing the entire tree at every historical commit).
+- **LLM is additive only.** The AI explanation layer can read the score. It cannot write to it.
+
+---
+
+## 📦 Installation
+
+**Requirements:** Python 3.11+
+
+### Option A — pip (recommended)
 
 ```bash
-git clone <this-repo> && cd sentinelScan
+pip install sentinel-risk
+```
+
+This installs the `sentinel` CLI, the `sentinel-mcp` server binary, and all dependencies (`lightgbm`, `pydriller`, `GitPython`, `rich`, `fastmcp`, etc.).
+
+### Option B — npx (zero-install MCP server only)
+
+```bash
+npx sentinel-mcp
+```
+
+Runs the MCP server without any Python setup. Useful for connecting Claude Desktop to Sentinel without installing anything globally.
+
+### Option C — from source
+
+```bash
+git clone https://github.com/Nishka30/SentinalScan.git
+cd SentinalScan
+
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # macOS / Linux
-pip install -e ".[dev]"
 
-sentinel diff                   # score your uncommitted work
-sentinel scan                   # score your branch against the default branch
+pip install -e ".[dev]"
 ```
 
-That works immediately, with transparent rule-based scoring. To learn from the
-repository's own history:
+---
+
+## 🚀 Quickstart: First Scan in 60 Seconds
 
 ```bash
-sentinel train --max-commits 5000     # mine bug history, train, save the model
-sentinel evaluate --max-commits 5000  # prove it beats a naive baseline
-sentinel scan                         # now scored by the model
+# 1. Install
+pip install sentinel-risk
+
+# 2. Go to any git repository you work in
+cd /path/to/your/project
+
+# 3. Scan changes since main
+sentinel scan
+
+# 4. Or score uncommitted (staged + unstaged) changes
+sentinel diff
 ```
 
-`train` writes `.sentinel/model.txt`. Delete that directory to go back to the
-rules.
+That is it. No configuration required for the core score.
 
-### Commands
+**Want plain-English explanations too?** Run the interactive setup wizard:
 
-| Command | What it does |
-| --- | --- |
-| `sentinel scan` | Score committed changes vs the default branch. `--since <ref>`, `--all` |
-| `sentinel diff` | Score uncommitted work in the working tree |
-| `sentinel train` | Mine bug history and train the model |
-| `sentinel evaluate` | Time-split metrics vs a lines-changed baseline |
-| `sentinel explain` | Score, then narrate it in plain English |
-
-Add `--json` to any scan for machine-readable output, or `--explain` to append
-the narrative.
-
-## What it looks like
-
-`sentinel scan` on a real change to `psf/requests`:
-
-```
-Why
- impact │ reason                                  │ evidence
-────────┼─────────────────────────────────────────┼───────────────────────────
-    +69 │ Lines added                             │ value 7; log-odds +0.687
-    -39 │ Complexity of the most complex file     │ value 19; log-odds -0.386
-    -16 │ Lines deleted                           │ value 0; log-odds -0.162
-    +10 │ Source files touched                    │ value 1; log-odds +0.100
-
-Impact
-  5 file(s) import these directly, 8 more within 3 hops.
-  direct: src/requests/adapters.py, src/requests/auth.py,
-          src/requests/models.py, src/requests/sessions.py, tests/test_utils.py
-  cycle: src/requests/utils.py takes part in a circular import, so some of its
-         dependents are also its dependencies.
-
-Recommendation
-  Deployable, but review it properly and watch it after release. Suggested:
-  consider splitting this into smaller, separately deployable changes; the most
-  complex function here deserves a second reviewer.
+```bash
+sentinel configure
 ```
 
-> _Screenshot placeholder — the above is real terminal output, captured as text._
+This walks you through choosing your LLM provider and saves the key to a local `.env` file. Once done:
 
-And `sentinel explain` on the same change:
-
-```
-┌───── AI explanation — nvidia/llama-3.3-nemotron-super-49b-v1 ─────┐
-│  Why this is risky                                                │
-│  This change has a medium risk score of 42, primarily driven by    │
-│  the 7 lines added (+69 impact), somewhat offset by the complexity │
-│  of the most complex file (-39). The complexity of the file,       │
-│  despite being high, lowered the risk according to the model's     │
-│  historical data.                                                 │
-│                                                                   │
-│  Roll back if                                                     │
-│  ...unexpected errors in the affected files (e.g.,                │
-│  src/requests/adapters.py, tests/test_utils.py)...                │
-└───── generated prose; the score above is computed, not written ────┘
+```bash
+sentinel scan --explain
+# or
+sentinel diff --explain
 ```
 
-Every number and filename there was handed to it. Note the complexity sentence:
-SHAP reported that high complexity *lowered* the score for this change, because
-that is what this repository's history showed, and the model was instructed to
-report such factors as measured rather than "correct" them.
+---
 
-## How it works
+## 📖 Full CLI Reference
 
-```
-git log ──> SZZ labelling ──> features ──> LightGBM ──> score
-                                                          │
-   import graph ──> blast radius ─────────────────────────>├──> report
-                                                          │
-                              one NVIDIA call ────────────>┘  (optional prose)
-```
+### `sentinel scan` — Score committed changes
 
-**1. SZZ labelling** — find commits whose subject reads like a bug fix, then
-`git blame` the lines each fix *deleted* to find the commits that introduced
-them. Those are labelled bug-inducing. Real labels, mined from the repository,
-not guessed.
+Scores the diff between `HEAD` and the default branch (or a specified ref).
 
-**2. Features** — each commit becomes numbers: size, spread across folders, the
-file's change and bug-fix history, how well the author knows it, complexity, day
-and hour. Every feature is read from a running tally of *prior* history, before
-the commit is applied, so nothing can leak from the commit it describes.
-
-**3. The model** — LightGBM, weighting the rare positive class, with the number
-of boosting rounds chosen on a held-out slice. SHAP turns each prediction back
-into named reasons.
-
-**4. Blast radius** — an in-memory networkx import graph, walked backwards from
-the changed files to find their dependents, direct and transitive kept separate.
-
-**5. The explanation** — one call to an NVIDIA-hosted model, given the finished
-analysis and asked to phrase it.
-
-Without a trained model, steps 1–3 are replaced by a transparent points-based
-rule engine whose thresholds come from the repository's own percentiles. The
-report always says which engine scored it.
-
-## Evaluation
-
-Measured on `psf/requests` — 4,875 non-merge commits, 777 labelled bug-inducing
-(16.0%):
-
-| metric | model | lines-changed baseline | verdict |
-| --- | --- | --- | --- |
-| ROC-AUC | **0.737** | 0.722 | model wins |
-| PR-AUC | **0.250** | 0.220 | model wins |
-
-Train on the 3,640 older commits, test on the 1,214 newest, split at 2017-05-17.
-Base rate in the test set is 8.2%, so PR-AUC 0.250 is roughly 3× random.
-
-**The margin is modest, and here is the honest reason why.** SZZ labels a commit
-by blaming the lines it wrote, so a large commit has more lines available to be
-blamed later — size and the label are mechanically correlated. Median
-`lines_changed` is 19 for bug-inducing commits against 4 for clean ones. That
-makes "bigger diffs are riskier" a genuinely strong baseline, and beating it by
-0.03 PR-AUC is a real but unspectacular result. It also depends on having enough
-labelled history: on the newest 1,200 commits alone (98 positives) the model
-*lost* to the baseline; across the full history (777 positives) it wins.
-
-Two rules keep the number honest:
-
-- **The split is by time, never at random.** A random split lets the model learn
-  from commits that came after the ones it is tested on. It is the easiest way to
-  report an accuracy the tool will never reproduce.
-- **The baseline is deliberately hard to beat.** A model that cannot beat one
-  feature is not worth its complexity.
-
-## GitHub Action
-
-Comments on every pull request with the score, reasons and blast radius.
-
-```yaml
-name: Deployment risk
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  risk:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # required — the score comes from commit history
-
-      - uses: your-org/sentinel@main
-        with:
-          threshold: "65"
-          fail-over-threshold: "false" # comment first; gate once trusted
+```bash
+sentinel scan                        # vs. auto-detected default branch
+sentinel scan --since origin/main    # vs. a specific ref
+sentinel scan --since HEAD~10        # last 10 commits
+sentinel scan --all                  # rank every tracked file by inherent risk
+sentinel scan --explain              # also request LLM narrative
+sentinel scan --json                 # machine-readable JSON output
+sentinel scan --repo /other/project  # analyze a different repository
 ```
 
-`fetch-depth: 0` is not tidiness. A shallow clone hides the history the score is
-built from, and every file looks brand new.
+### `sentinel diff` — Score uncommitted work
 
-The comment is rendered from `--json`, so nothing is recomputed for CI:
+Scores the files currently modified in your working tree (staged and unstaged).
 
-> ## 🔴 HIGH — deployment risk 71/100
->
-> **Hold this, or ship it behind a flag with a rollback ready.**
->
-> Scored by a model trained on 4,854 of this repository's commits over 13 changed file(s).
->
-> \> Above the configured threshold of 65.
->
-> ### Why
->
-> | SHAP impact | Factor | Evidence |
-> | --- | --- | --- |
-> | +125 | Lines added | value 56; log-odds +1.255 |
-> | -29 | Average complexity of the files touched | value 12.25; log-odds -0.287 |
->
-> ### Impact
->
-> **8** file(s) import these directly, **2** more within 3 hops.
->
-> ⚠️ `src/requests/utils.py` is part of a circular import.
-
-Defaults to informing rather than blocking, because a gate that fires on
-everything gets ignored. Set `fail-over-threshold: "true"` to make it a required
-check. The AI narrative is off in CI unless you pass `explain: "true"` with an
-`nvidia-api-key` — CI should not depend on a third-party API, and the score is
-identical either way. Full options in
-[github-action/action.yml](github-action/action.yml); a complete example in
-[github-action/example-workflow.yml](github-action/example-workflow.yml).
-
-## Use as an MCP server
-
-One server, one tool — `get_deployment_risk` — so Claude Desktop, Cursor, or any
-MCP-compatible client can ask Sentinel about a repository directly.
-
-The server is built with **FastMCP** and speaks the MCP protocol over stdio.
-
-### Claude Desktop (`claude_desktop_config.json`)
-
-```json
-{
-  "mcpServers": {
-    "sentinel": { "command": "sentinel-mcp" }
-  }
-}
+```bash
+sentinel diff
+sentinel diff --explain
+sentinel diff --json
 ```
 
-> **If the client cannot find `sentinel-mcp`**, GUI apps don't inherit your
-> shell PATH. Use the absolute path to the venv's binary instead:
-> - macOS / Linux: `/path/to/.venv/bin/sentinel-mcp`
-> - Windows: `C:\path\to\.venv\Scripts\sentinel-mcp.exe`
+### `sentinel explain` — Score and explain
 
-### Optional `env` block — NVIDIA_API_KEY for the `explain` feature
+Shorthand for scan + explain in one step.
+
+```bash
+sentinel explain                     # explains committed changes
+sentinel explain --diff              # explains uncommitted changes
+sentinel explain --since HEAD~5
+sentinel explain --json
+```
+
+### `sentinel train` — Train the model on your history
+
+Mines the repository's git history using the SZZ algorithm and trains a LightGBM model. The trained model is saved to `.sentinel/` in the repository root.
+
+```bash
+sentinel train                       # mine up to 1,500 commits (default)
+sentinel train --max-commits 5000    # mine deeper history (slower)
+sentinel train --repo /other/project
+```
+
+After training, all subsequent `scan` / `diff` calls use the model instead of the rule engine.
+
+### `sentinel evaluate` — Measure model quality
+
+Mines history and runs a time-based train/test split to measure how well the model beats a naive "lines changed" baseline. Always uses the newest commits as the test set — never a random split.
+
+```bash
+sentinel evaluate
+sentinel evaluate --max-commits 3000
+```
+
+Example output:
+
+```
+  Training rows:   3,621   Positives: 312 (8.6%)
+  Test rows:       1,207   Positives: 104 (8.6%)
+
+  Rule engine        PR-AUC: 0.271
+  LightGBM model     PR-AUC: 0.438   ✓ beats baseline
+```
+
+### `sentinel configure` — Set up LLM integration
+
+Interactive wizard that saves your LLM settings to a local `.env` file.
+
+```bash
+sentinel configure
+```
+
+Prompts:
+1. **Provider** — `NVIDIA`, `OpenAI`, or `Custom` (any OpenAI-compatible endpoint)
+2. **Base URL** — auto-filled for known providers, or enter your own
+3. **Model name** — auto-filled for known providers, or enter your own
+4. **API key** — entered securely (hidden input)
+
+Supported out of the box:
+- **NVIDIA NIM** (`https://integrate.api.nvidia.com/v1`) — default
+- **OpenAI** (`https://api.openai.com/v1`)
+- **Any custom endpoint** — Ollama, DeepSeek, Together AI, Azure OpenAI, etc.
+
+### `sentinel version` — Print version
+
+```bash
+sentinel version
+# sentinel 0.1.1
+```
+
+---
+
+## 🤖 Enabling AI Explanations (Optional)
+
+Explanations are completely optional. The risk score is identical with or without them.
+
+### Step 1 — Configure
+
+```bash
+sentinel configure
+```
+
+Or set environment variables manually:
+
+```bash
+# .env  (copy from .env.example)
+NVIDIA_API_KEY=nvapi-xxxxxxxxxxxx
+SENTINEL_LLM_MODEL=meta/llama-3.3-70b-instruct
+SENTINEL_LLM_BASE_URL=https://integrate.api.nvidia.com/v1
+```
+
+### Step 2 — Run with `--explain`
+
+```bash
+sentinel scan --explain
+```
+
+The explanation appears below the risk table in the terminal output. It summarizes *why* the score is what it is, citing specific files, rules, and history signals.
+
+### Using a different LLM provider
+
+```bash
+# OpenAI GPT-4o
+OPENAI_API_KEY=sk-...
+SENTINEL_LLM_BASE_URL=https://api.openai.com/v1
+SENTINEL_LLM_MODEL=gpt-4o
+
+# Local Ollama
+SENTINEL_LLM_API_KEY=anything
+SENTINEL_LLM_BASE_URL=http://localhost:11434/v1
+SENTINEL_LLM_MODEL=llama3.2
+
+# DeepSeek
+SENTINEL_LLM_API_KEY=sk-...
+SENTINEL_LLM_BASE_URL=https://api.deepseek.com/v1
+SENTINEL_LLM_MODEL=deepseek-chat
+```
+
+---
+
+## 🧠 Training a Custom Model on Your Repository
+
+The default rule engine works out of the box, but training a model on your own history significantly improves accuracy — especially for repositories with complex, high-churn areas that the rules cannot distinguish.
+
+```bash
+# Step 1: Train (takes 2–10 minutes depending on history size)
+sentinel train
+
+# Step 2: Verify the model beats the baseline
+sentinel evaluate
+
+# Step 3: Scan normally — the model is used automatically
+sentinel scan
+```
+
+**What gets saved:**
+
+```
+your-project/
+└── .sentinel/
+    ├── model.txt           # The LightGBM booster
+    └── model.meta.json     # Training metadata (rows, positives, feature list)
+```
+
+The `.sentinel/` directory is auto-added to `.gitignore` so you do not accidentally commit your model. If you *want* to commit and share it, remove it from `.gitignore`.
+
+**If the feature set changes** (Sentinel updates), the old model is detected as incompatible and the rule engine is used as fallback. A warning is printed. Re-run `sentinel train` to build a fresh model.
+
+---
+
+## 🔌 MCP Server — For Claude Desktop & Cursor
+
+Sentinel exposes a single MCP tool — `get_deployment_risk` — that allows any MCP-compatible AI client to analyze a repository's deployment safety on demand.
+
+### Tool Signature
+
+```python
+get_deployment_risk(
+    repo_path: str,          # Absolute path to the git repository
+    scope: str = "scan",     # "scan" | "diff" | "all"
+    since: str | None = None,# e.g. "main", "HEAD~20" (for scope="scan")
+    explain: bool = False,   # Request LLM narrative (needs API key)
+) -> dict                    # Full risk report as structured JSON
+```
+
+### Claude Desktop Setup
+
+Edit `claude_desktop_config.json`:
+
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "sentinel": {
       "command": "sentinel-mcp",
-      "env": { "NVIDIA_API_KEY": "nvapi-..." }
+      "env": {
+        "NVIDIA_API_KEY": "nvapi-your-key-here"
+      }
     }
   }
 }
 ```
 
-Without the key the analysis runs normally; only the plain-English narrative is
-skipped.
+> **Tip:** If Claude cannot find `sentinel-mcp`, GUI apps may not inherit your shell PATH. Use the absolute path instead:
+> - Windows: `C:\Users\YourName\AppData\Local\Programs\Python\Python311\Scripts\sentinel-mcp.exe`
+> - macOS: `/Users/yourname/.local/bin/sentinel-mcp`
 
-### Calling it from the client
+### Cursor Setup
 
-Ask the model to assess the deployment risk of a repository and pass its
-absolute path; the model invokes `get_deployment_risk` automatically.
+In Cursor settings → MCP Servers → Add:
 
-Example prompt: _"What is the deployment risk of `/home/me/myapp`? Use
-`sentinel`."_
+```json
+{
+  "sentinel": {
+    "command": "sentinel-mcp"
+  }
+}
+```
 
-The tool accepts:
-- `repo_path` (required) — absolute path to the git repository
-- `scope` — `scan` (default) / `diff` / `all`
-- `since` — ref to compare against, e.g. `main` or `HEAD~20`
-- `explain` — `true` to append the plain-English narrative (needs `NVIDIA_API_KEY`)
-
-It returns the same JSON contract the CLI emits — score, band, reasons, blast
-radius — as both a text block and `structuredContent`.
-
-## Configuration
-
-Copy `.env.example` to `.env`. Every value is optional — the score is computed
-without an LLM, so a missing key only skips the explanation.
-
-Sentinel supports any OpenAI-compatible LLM provider (NVIDIA, OpenAI, DeepSeek, Local/Ollama, etc.).
-
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `SENTINEL_LLM_API_KEY` | API Key for the LLM provider (Falls back to `NVIDIA_API_KEY` or `OPENAI_API_KEY`) | unset (explanation skipped) |
-| `SENTINEL_LLM_BASE_URL` | Base URL of the OpenAI-compatible API endpoint | `https://integrate.api.nvidia.com/v1` |
-| `SENTINEL_LLM_MODEL` | The model name to query | `meta/llama-3.3-70b-instruct` |
-| `SENTINEL_LLM_TIMEOUT` | Seconds to wait for the explanation | `60` |
-| `SENTINEL_LLM_MAX_TOKENS` | Length cap on the narrative | `800` |
-| `SENTINEL_LLM_TEMPERATURE` | Sampling temperature | `0.2` |
-
-Every threshold, weight and training knob lives in
-[config.py](sentinel/config.py) and is tunable without touching any logic.
-
-## Design notes
-
-**The AI cannot move the score, structurally.** `explain()` receives an
-already-frozen `ChangeRisk`; `Explanation` has no field for a score, band or
-reason; attaching one returns a new result rather than mutating. Prompts are not
-a security boundary, so a model that decides the score "should really be 90" has
-nowhere to put it. A test feeds it a reply insisting the change is *"0/100 and
-perfectly safe"* and asserts the payload is byte-identical apart from the prose.
-
-**History is measured before the change being scored.** Otherwise a change
-improves its own files' track record and hides its own risk.
-
-**History follows renames.** Without it, a repository that moved `foo/` to
-`src/foo/` looks brand new — `requests/models.py` reported 9 commits and 4 bug
-fixes when the real figures were 726 and 181.
-
-**Thresholds are relative to the repository.** Eight past bug fixes is
-remarkable in a young service and unremarkable in a fifteen-year-old library. On
-`requests`, percentiles cut the files qualifying for the top tier from 40 (28% of
-files with any fix) to 15 (10%).
-
-**Bug-fix detection requires a fixing verb.** A bare `#1234` is a pull-request
-number in any squash-merging repository; counting those labelled 51% of
-`requests` as bug fixes instead of 13%.
-
-## Limitations
-
-Kept deliberately visible.
-
-- **Bug-fix detection is keyword-based.** It misses a fix whose subject says
-  "tidy up" and catches a feature that mentions "fix".
-- **Recent commits look cleaner than they are**, because nobody has found their
-  bugs yet. Inherent to SZZ, and part of why evaluation splits by time.
-- **SZZ correlates with commit size**, which is why the model's margin over a
-  size-only baseline is modest rather than dramatic. Stated in full above.
-- **The dependency graph sees static imports only.** Java same-package
-  references, `importlib.import_module(name)`, plugin registries and dependency
-  injection are invisible. Blast radius is a **floor** on impact, not a ceiling.
-- **Test detection is convention-based.** `src/requests/models.py` reads as
-  untested even though `tests/test_requests.py` covers it, because the names do
-  not correspond.
-- **The AI narrative is unverified prose.** It is grounded in the facts it is
-  given and cannot alter the score, but nothing checks its rollout advice is
-  *good*. Treat the numbers as the finding and the narrative as a starting point.
-
-## Performance
-
-| Step | Cost on `psf/requests` (6,486 commits) |
-| --- | --- |
-| History walk (`git log --numstat`) | ~5s |
-| Dependency graph | 0.13s |
-| SZZ blame (`train` / `evaluate`) | ~4.5 min for 656 bug-fix commits |
-| AI explanation | one call, 60s timeout, optional |
-
-`train` and `evaluate` take `--max-commits` to bound the slow part, and always
-report the window they used so a truncated run cannot be mistaken for a full one.
-
-## Tests
+### Zero-install via npx
 
 ```bash
-pytest
+# In claude_desktop_config.json
+{
+  "mcpServers": {
+    "sentinel": {
+      "command": "npx",
+      "args": ["sentinel-mcp"]
+    }
+  }
+}
 ```
 
-298 tests, no network. The OpenAI client is replaced wholesale and an autouse
-fixture blanks `NVIDIA_API_KEY`, so a real key in a developer's `.env` cannot
-turn the suite into a live API call. The git tests build real repositories in
-temp directories — including one with a bug deliberately introduced and later
-fixed, so the SZZ blame is checked against a known answer — because the point of
-these modules is that they agree with git, and a mocked git proves nothing.
+### Testing with MCP Inspector
 
-## Project layout
-
-```
-sentinel/
-  cli.py             typer commands; presentation only
-  analysis.py        orchestration — no typer, no rich
-  commit_log.py      parsing git's output (numstat, renames, dates)
-  git_reader.py      asking the repository questions
-  static_analysis.py complexity + test detection
-  risk_rules.py      transparent points-based scoring
-  history_mining.py  SZZ labelling
-  features.py        shared data model + the feature vector
-  model.py           LightGBM + SHAP
-  evaluation.py      time split, ROC-AUC / PR-AUC
-  blast_radius.py    import graph + impact
-  explain.py         the single LLM call
-  results.py         result types
-  serialization.py   the versioned JSON contract
-  report.py          terminal rendering
-  pr_comment.py      the PR comment
-mcp_server/          one MCP tool over stdio
-github-action/       composite action + example workflow
+```bash
+npx @modelcontextprotocol/inspector sentinel-mcp
 ```
 
-See [PLAN.md](PLAN.md) for the build plan, phase by phase.
-
-## License
-
-MIT
+Open the URL shown in the terminal, select the `sentinel` server, and call `get_deployment_risk` interactively.
 
 ---
 
-## Publishing
+## ⚙️ Configuration Reference
+
+All settings are read from environment variables or a `.env` file in the working directory.
+
+### LLM Settings
+
+| Variable | Description | Default |
+|---|---|---|
+| `NVIDIA_API_KEY` | NVIDIA NIM API key (from [build.nvidia.com](https://build.nvidia.com)) | — |
+| `OPENAI_API_KEY` | OpenAI API key | — |
+| `SENTINEL_LLM_API_KEY` | API key for any other provider | — |
+| `SENTINEL_LLM_BASE_URL` | OpenAI-compatible base URL | `https://integrate.api.nvidia.com/v1` |
+| `SENTINEL_LLM_MODEL` | Model name to use for explanations | `meta/llama-3.3-70b-instruct` |
+| `SENTINEL_LLM_TIMEOUT` | Seconds to wait for LLM response | `60` |
+| `SENTINEL_LLM_MAX_TOKENS` | Max tokens in the explanation | `800` |
+| `SENTINEL_LLM_TEMPERATURE` | Sampling temperature | `0.2` |
+
+The key is resolved in order: `SENTINEL_LLM_API_KEY` → `NVIDIA_API_KEY` → `OPENAI_API_KEY`.
+
+### Scoring Thresholds
+
+Risk weights can be overridden if you find the defaults too lenient or strict for your team:
+
+| Variable | Description | Default |
+|---|---|---|
+| `SENTINEL_RULES` | JSON object overriding any `RiskWeights` field | (see config.py) |
+| `SENTINEL_DISTRIBUTION` | JSON overriding percentile settings | (see config.py) |
+| `SENTINEL_BLAST` | JSON overriding blast radius limits | (see config.py) |
+
+Example — tighten the "large edit" threshold:
+
+```bash
+SENTINEL_RULES='{"file_large_lines": 150, "file_large_points": 30}'
+```
+
+### Training Settings
+
+| Variable | Description | Default |
+|---|---|---|
+| `SENTINEL_TRAINING` | JSON overriding any `TrainingSettings` field | (see config.py) |
+
+Example — mine more history:
+
+```bash
+SENTINEL_TRAINING='{"max_commits": 5000}'
+```
+
+---
+
+## 🏗️ Architecture Overview
+
+```
+sentinalScan/
+├── sentinel/                  # Core library — no terminal, no network
+│   ├── analysis.py            # Orchestrator: calls all modules, returns AnalysisResult
+│   ├── git_reader.py          # Low-level git operations (GitPython)
+│   ├── commit_log.py          # Reads and parses git log (numstat + rename tracking)
+│   ├── history_mining.py      # SZZ labeling algorithm (PyDriller blame)
+│   ├── features.py            # Data model + feature vector (20 features)
+│   ├── risk_rules.py          # Rule engine: transparent, points-based scoring
+│   ├── model.py               # LightGBM wrapper: train, predict, SHAP explain
+│   ├── blast_radius.py        # Dependency graph (networkx) + impact walk
+│   ├── static_analysis.py     # Cyclomatic complexity (lizard), test detection
+│   ├── explain.py             # LLM narrative layer (OpenAI-compatible client)
+│   ├── evaluation.py          # Time-based model evaluation / PR-AUC
+│   ├── report.py              # Rich terminal rendering
+│   ├── serialization.py       # JSON serialization for --json and MCP
+│   ├── results.py             # AnalysisResult dataclass
+│   └── config.py              # All settings via pydantic-settings
+│
+├── mcp_server/
+│   └── server.py              # FastMCP wrapper — one tool, delegates to sentinel/
+│
+├── tests/                     # 296 tests, all passing
+│   ├── conftest.py            # Shared git repo fixtures
+│   ├── test_cli.py            # End-to-end CLI tests (typer test runner)
+│   ├── test_blast_radius.py   # Dependency graph tests
+│   ├── test_risk_rules.py     # Rule engine tests
+│   ├── test_model.py          # LightGBM training + prediction tests
+│   ├── test_explain.py        # LLM client tests (mocked)
+│   ├── test_mcp_server.py     # MCP server tool tests
+│   └── ...                    # one file per module
+│
+├── pyproject.toml             # Package metadata + entry points
+├── package.json               # npm wrapper for npx sentinel-mcp
+└── .env.example               # Template for LLM configuration
+```
+
+### Data flow (scan)
+
+```
+git diff → git_reader → FileChange[]
+                             ↓
+           git log → FileHistory (per file)
+                             ↓
+           lizard → ComplexityInfo (per file)
+                             ↓
+                      features.vector()           ← same function used in training
+                             ↓
+               ┌─── model.predict() ────────────── .sentinel/model.txt exists?
+               │                                               yes ↗   no ↘
+               │                              LightGBM score       rule engine
+               │                                           ↘      ↗
+               └──────────────── ChangeRisk (score, band, reasons)
+                                         ↓
+                              blast_radius.compute()   ← networkx dependency walk
+                                         ↓
+                                   AnalysisResult
+                                         ↓
+                              report.render() / to_dict()
+                                         ↓ (optional)
+                              explain.explain() → LLM API → narrative string
+```
+
+---
+
+## 🧪 Running Tests
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all 296 tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run a specific test file
+pytest tests/test_risk_rules.py -v
+
+# Run tests matching a keyword
+pytest -k "blast_radius" -v
+```
+
+Tests use in-memory git repositories built by `conftest.py` fixtures — no real remote connections, no temporary files on disk.
+
+---
+
+## 🚢 Publishing
 
 ### Python Package (PyPI)
 
-The PyPI distribution name is **`sentinel-risk`** (the command the user types stays `sentinel`). If `sentinel-risk` is already taken on PyPI, change only the `name` field in `pyproject.toml`.
-
-#### Step-by-step
 ```bash
-# 1. Install build tools
+# Install build tools (once)
 pip install build twine
 
-# 2. Build the wheel and source archive
+# Build wheel + sdist
 python -m build
-# → dist/sentinel_risk-0.1.0-py3-none-any.whl
-# → dist/sentinel_risk-0.1.0.tar.gz
 
-# 3. Upload to TestPyPI first
-twine upload --repository testpypi dist/*
-
-# 4. Verify on TestPyPI
-pip install --index-url https://test.pypi.org/simple/ sentinel-risk
-
-# 5. Upload to real PyPI
+# Upload to real PyPI
 twine upload dist/*
+
+# (Optional) Test on TestPyPI first
+twine upload --repository testpypi dist/*
+pip install -i https://test.pypi.org/simple/ sentinel-risk==0.1.1
 ```
 
-Twine will prompt for your PyPI credentials (or read them from `~/.pypirc`).
+Before publishing, make sure `pyproject.toml` has the correct version and your GitHub URL:
 
----
+```toml
+[project.urls]
+Homepage = "https://github.com/Nishka30/SentinalScan"
+Repository = "https://github.com/Nishka30/SentinalScan"
+```
 
-### Node Package (NPM)
+### Node Package (npm)
 
-To make it incredibly easy for Node/JavaScript developers to use Sentinel as an MCP server without manually configuring Python environments, we also package a zero-config wrapper for NPM (`sentinel-mcp`).
-
-#### Step-by-step
 ```bash
-# 1. Log in to npm (once)
+# Log in to npm (once)
 npm login
 
-# 2. Publish to the npm registry
+# Publish the zero-install wrapper
 npm publish --access public
 ```
 
-Once published, users can launch the MCP server with zero setup via:
-```bash
-npx sentinel-mcp
-```
-*(If Python/`sentinel-risk` is not already installed on the user's system, the npm wrapper will attempt to automatically auto-install it via `pip` on the fly).*
+The npm package installs `sentinel-risk` via pip automatically and provides the `npx sentinel-mcp` entrypoint. See `package.json` and `bin/sentinel-mcp.js` for details.
 
 ---
 
-### No-publish alternative (install directly from GitHub)
+## 📝 CI / CD Integration
 
-```bash
-pip install git+https://github.com/<user>/sentinelScan.git
+Use `--json` to pipe Sentinel output into your CI pipeline:
+
+```yaml
+# GitHub Actions example
+- name: Risk check
+  run: |
+    pip install sentinel-risk
+    sentinel scan --json > risk.json
+    SCORE=$(jq '.risk.score' risk.json)
+    echo "Risk score: $SCORE"
+    if [ "$SCORE" -gt 80 ]; then
+      echo "::error::Risk score $SCORE exceeds threshold of 80"
+      exit 1
+    fi
 ```
 
-This clones and installs the package in one step without touching PyPI, useful for private or pre-release deployments.
+Or use the GitHub Action in `github-action/` if you want a dedicated action in your workflow (see `github-action/` for full usage).
+
+---
+
+## 👩‍💻 Author
+
+**Nishka Shrimali**
+- GitHub: [@Nishka30](https://github.com/Nishka30)
+- Email: shrimalinishka@gmail.com
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+---
+
+<div align="center">
+
+**If Sentinel saves you from a bad deploy, leave a ⭐ on GitHub.**
+
+</div>

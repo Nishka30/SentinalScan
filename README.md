@@ -637,7 +637,7 @@ Or use the GitHub Action in `github-action/` if you want a dedicated action in y
 
 **Nishka Shrimali**
 - GitHub: [@Nishka30](https://github.com/Nishka30)
-- Email: shrimalinishka@gmail.com
+- Email: shrimalinishka30@gmail.com
 
 ---
 

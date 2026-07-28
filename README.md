@@ -242,51 +242,73 @@ identical either way. Full options in
 [github-action/action.yml](github-action/action.yml); a complete example in
 [github-action/example-workflow.yml](github-action/example-workflow.yml).
 
-## MCP server
+## Use as an MCP server
 
-One server, one tool — `get_deployment_risk` — so Claude or Cursor can ask about
-a repository directly. Register it:
+One server, one tool — `get_deployment_risk` — so Claude Desktop, Cursor, or any
+MCP-compatible client can ask Sentinel about a repository directly.
+
+The server is built with **FastMCP** and speaks the MCP protocol over stdio.
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "sentinel": { "command": "sentinel-mcp" }
+  }
+}
+```
+
+> **If the client cannot find `sentinel-mcp`**, GUI apps don't inherit your
+> shell PATH. Use the absolute path to the venv's binary instead:
+> - macOS / Linux: `/path/to/.venv/bin/sentinel-mcp`
+> - Windows: `C:\path\to\.venv\Scripts\sentinel-mcp.exe`
+
+### Optional `env` block — NVIDIA_API_KEY for the `explain` feature
 
 ```json
 {
   "mcpServers": {
     "sentinel": {
       "command": "sentinel-mcp",
-      "args": []
+      "env": { "NVIDIA_API_KEY": "nvapi-..." }
     }
   }
 }
 ```
 
-Or, without installing it on your PATH:
+Without the key the analysis runs normally; only the plain-English narrative is
+skipped.
 
-```json
-{
-  "mcpServers": {
-    "sentinel": {
-      "command": "/path/to/sentinelScan/.venv/bin/python",
-      "args": ["-m", "mcp_server.server"],
-      "env": { "NVIDIA_API_KEY": "" }
-    }
-  }
-}
-```
+### Calling it from the client
 
-The tool takes `repo_path`, an optional `scope` (`scan` / `diff` / `all`),
-`since`, and `explain`. It returns the same JSON contract the CLI emits — score,
-band, reasons, blast radius — as both a text block and `structuredContent`. It
-calls the library directly rather than shelling out to the CLI. The narrative is
-included only when `explain` is set and a key is present.
+Ask the model to assess the deployment risk of a repository and pass its
+absolute path; the model invokes `get_deployment_risk` automatically.
+
+Example prompt: _"What is the deployment risk of `/home/me/myapp`? Use
+`sentinel`."_
+
+The tool accepts:
+- `repo_path` (required) — absolute path to the git repository
+- `scope` — `scan` (default) / `diff` / `all`
+- `since` — ref to compare against, e.g. `main` or `HEAD~20`
+- `explain` — `true` to append the plain-English narrative (needs `NVIDIA_API_KEY`)
+
+It returns the same JSON contract the CLI emits — score, band, reasons, blast
+radius — as both a text block and `structuredContent`.
 
 ## Configuration
 
 Copy `.env.example` to `.env`. Every value is optional — the score is computed
 without an LLM, so a missing key only skips the explanation.
 
+Sentinel supports any OpenAI-compatible LLM provider (NVIDIA, OpenAI, DeepSeek, Local/Ollama, etc.).
+
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `NVIDIA_API_KEY` | Key from [build.nvidia.com](https://build.nvidia.com) | unset (explanation skipped) |
-| `SENTINEL_LLM_MODEL` | Any model from the NVIDIA catalog | `meta/llama-3.3-70b-instruct` |
+| `SENTINEL_LLM_API_KEY` | API Key for the LLM provider (Falls back to `NVIDIA_API_KEY` or `OPENAI_API_KEY`) | unset (explanation skipped) |
+| `SENTINEL_LLM_BASE_URL` | Base URL of the OpenAI-compatible API endpoint | `https://integrate.api.nvidia.com/v1` |
+| `SENTINEL_LLM_MODEL` | The model name to query | `meta/llama-3.3-70b-instruct` |
 | `SENTINEL_LLM_TIMEOUT` | Seconds to wait for the explanation | `60` |
 | `SENTINEL_LLM_MAX_TOKENS` | Length cap on the narrative | `800` |
 | `SENTINEL_LLM_TEMPERATURE` | Sampling temperature | `0.2` |
@@ -388,5 +410,69 @@ mcp_server/          one MCP tool over stdio
 github-action/       composite action + example workflow
 ```
 
+See [PLAN.md](PLAN.md) for the build plan, phase by phase.
 
+## License
 
+MIT
+
+---
+
+## Publishing
+
+### Python Package (PyPI)
+
+The PyPI distribution name is **`sentinel-risk`** (the command the user types stays `sentinel`). If `sentinel-risk` is already taken on PyPI, change only the `name` field in `pyproject.toml`.
+
+#### Step-by-step
+```bash
+# 1. Install build tools
+pip install build twine
+
+# 2. Build the wheel and source archive
+python -m build
+# → dist/sentinel_risk-0.1.0-py3-none-any.whl
+# → dist/sentinel_risk-0.1.0.tar.gz
+
+# 3. Upload to TestPyPI first
+twine upload --repository testpypi dist/*
+
+# 4. Verify on TestPyPI
+pip install --index-url https://test.pypi.org/simple/ sentinel-risk
+
+# 5. Upload to real PyPI
+twine upload dist/*
+```
+
+Twine will prompt for your PyPI credentials (or read them from `~/.pypirc`).
+
+---
+
+### Node Package (NPM)
+
+To make it incredibly easy for Node/JavaScript developers to use Sentinel as an MCP server without manually configuring Python environments, we also package a zero-config wrapper for NPM (`sentinel-mcp`).
+
+#### Step-by-step
+```bash
+# 1. Log in to npm (once)
+npm login
+
+# 2. Publish to the npm registry
+npm publish --access public
+```
+
+Once published, users can launch the MCP server with zero setup via:
+```bash
+npx sentinel-mcp
+```
+*(If Python/`sentinel-risk` is not already installed on the user's system, the npm wrapper will attempt to automatically auto-install it via `pip` on the fly).*
+
+---
+
+### No-publish alternative (install directly from GitHub)
+
+```bash
+pip install git+https://github.com/<user>/sentinelScan.git
+```
+
+This clones and installs the package in one step without touching PyPI, useful for private or pre-release deployments.

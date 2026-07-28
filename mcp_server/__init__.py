@@ -1,5 +1,5 @@
-"""An MCP server exposing Sentinel's analysis as a single tool."""
+"""MCP server — powered by FastMCP."""
 
-from mcp_server.server import TOOL_NAME, handle_request, serve
+from mcp_server.server import get_deployment_risk, main, mcp
 
-__all__ = ["TOOL_NAME", "handle_request", "serve"]
+__all__ = ["mcp", "get_deployment_risk", "main"]

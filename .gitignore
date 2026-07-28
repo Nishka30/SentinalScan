@@ -21,3 +21,8 @@ venv/
 
 # Local tool state, not project configuration
 .claude/
+
+# Node
+node_modules/
+package-lock.json
+

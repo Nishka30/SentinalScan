@@ -241,6 +241,8 @@ class Settings(BaseSettings):
     # Explicit aliases because these two variables use different naming
     # conventions in the deployment environment (one is NVIDIA's, one is ours).
     nvidia_api_key: str | None = Field(default=None, validation_alias="NVIDIA_API_KEY")
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    sentinel_llm_api_key: str | None = Field(default=None, validation_alias="SENTINEL_LLM_API_KEY")
     llm_model: str = Field(
         default="meta/llama-3.3-70b-instruct",
         validation_alias="SENTINEL_LLM_MODEL",
@@ -298,9 +300,14 @@ class Settings(BaseSettings):
     )
 
     @property
+    def api_key(self) -> str | None:
+        """The active LLM API key, checked in order of preference."""
+        return self.sentinel_llm_api_key or self.nvidia_api_key or self.openai_api_key
+
+    @property
     def llm_enabled(self) -> bool:
         """True when an AI explanation can be attempted at all."""
-        return bool(self.nvidia_api_key)
+        return bool(self.api_key)
 
 
 @lru_cache(maxsize=1)

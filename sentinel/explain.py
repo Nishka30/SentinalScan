@@ -84,7 +84,7 @@ def explain(
     if not settings.llm_enabled:
         return Explanation(
             available=False,
-            skipped_reason="NVIDIA_API_KEY is not set",
+            skipped_reason="NVIDIA_API_KEY is not set (neither is OPENAI_API_KEY or SENTINEL_LLM_API_KEY)",
         )
 
     try:
@@ -97,7 +97,7 @@ def explain(
     try:
         client = OpenAI(
             base_url=settings.llm_base_url,
-            api_key=settings.nvidia_api_key,
+            api_key=settings.api_key,
             timeout=settings.llm_timeout_seconds,
             max_retries=settings.llm_max_retries,
         )

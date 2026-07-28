@@ -9,6 +9,8 @@ description = "Sentinel — a deployment risk analyzer that learns from a reposi
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Nishka Shrimali" }]
+keywords = ["deployment", "risk", "scanner", "git", "mcp", "ci"]
 
 dependencies = [
     "typer>=0.12",
@@ -21,10 +23,15 @@ dependencies = [
     "shap>=0.45",
     "openai>=1.30",
     "pydantic-settings>=2.2",
+    "fastmcp>=2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/yourname/sentinelScan"
+Repository = "https://github.com/yourname/sentinelScan"
+
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 sentinel = "sentinel.cli:app"
@@ -36,6 +43,7 @@ packages = ["sentinel", "mcp_server"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
 # The suite uses plain functions only. Without this, pytest tries to collect
 # production classes like TestIndex and TestSignal and warns about each.
 python_classes = []

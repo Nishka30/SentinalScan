@@ -30,7 +30,7 @@ def payload_from(output: str) -> dict:
 def test_help_lists_every_command() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for command in ("scan", "diff", "explain"):
+    for command in ("scan", "diff", "explain", "configure"):
         assert command in result.output
 
 
@@ -38,6 +38,22 @@ def test_version_command_runs() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert "sentinel" in result.output
+
+
+def test_configure_command(tmp_path, monkeypatch) -> None:
+    # Use tmp_path to avoid modifying the real .env file in the workspace
+    monkeypatch.chdir(tmp_path)
+
+    # Simulate selecting Custom, entering url, model name, and API key
+    result = runner.invoke(app, ["configure"], input="Custom\nhttps://api.test.com/v1\ntest-model\ntest-api-key\n")
+    assert result.exit_code == 0
+    assert "Configuration saved to .env" in result.output
+
+    env_content = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "SENTINEL_LLM_API_KEY=test-api-key" in env_content
+    assert "SENTINEL_LLM_BASE_URL=https://api.test.com/v1" in env_content
+    assert "SENTINEL_LLM_MODEL=test-model" in env_content
+
 
 
 def test_explain_runs_without_a_key_and_says_it_skipped(tiny_repo: Repo) -> None:

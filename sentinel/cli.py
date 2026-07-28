@@ -256,6 +256,72 @@ def explain(
 
 
 @app.command()
+def configure() -> None:
+    """Interactively configure LLM settings and save them to .env."""
+    console.print("[bold green]Sentinel LLM Configuration[/]")
+    console.print("This will configure LLM integration for generating risk explanations and save it to your local .env file.\n")
+
+    provider = typer.prompt(
+        "Select LLM Provider (NVIDIA, OpenAI, Custom)",
+        default="NVIDIA",
+    ).strip().upper()
+
+    default_url = "https://integrate.api.nvidia.com/v1"
+    default_model = "meta/llama-3.3-70b-instruct"
+
+    if provider == "NVIDIA":
+        base_url = default_url
+        model = default_model
+    elif provider == "OPENAI":
+        base_url = "https://api.openai.com/v1"
+        model = "gpt-4o"
+    else:
+        base_url = typer.prompt("Enter API Base URL", default="https://api.openai.com/v1").strip()
+        model = typer.prompt("Enter Model Name", default="gpt-4o").strip()
+
+    api_key = typer.prompt("Enter your API Key", hide_input=True).strip()
+
+    # Read and update .env file
+    env_path = Path(".env")
+    env_content = {}
+
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env_content[k.strip()] = v.strip()
+
+    # Clear previous keys to avoid conflicts
+    env_content.pop("NVIDIA_API_KEY", None)
+    env_content.pop("OPENAI_API_KEY", None)
+    env_content.pop("SENTINEL_LLM_API_KEY", None)
+
+    # Set new key depending on choice
+    if provider == "NVIDIA":
+        env_content["NVIDIA_API_KEY"] = api_key
+    elif provider == "OPENAI":
+        env_content["OPENAI_API_KEY"] = api_key
+    else:
+        env_content["SENTINEL_LLM_API_KEY"] = api_key
+
+    env_content["SENTINEL_LLM_BASE_URL"] = base_url
+    env_content["SENTINEL_LLM_MODEL"] = model
+
+    # Write back to .env
+    lines = ["# Sentinel LLM Configuration (Automatically generated)"]
+    for k, v in env_content.items():
+        lines.append(f"{k}={v}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    console.print("\n[green]✓ Configuration saved to .env file![/]")
+    console.print(f"Provider:  [cyan]{provider}[/]")
+    console.print(f"Base URL:  [dim]{base_url}[/]")
+    console.print(f"Model:     [dim]{model}[/]")
+
+
+@app.command()
 def version() -> None:
     """Print the Sentinel version."""
     console.print(f"sentinel {__version__}")

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sentinel-risk"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sentinel — a deployment risk analyzer that learns from a repository's own bug history."
 readme = "README.md"
 requires-python = ">=3.11"

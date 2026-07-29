@@ -1,7 +1,7 @@
 # 🛡️ Sentinel — Deployment Risk Analyzer
 
 [![PyPI version](https://img.shields.io/pypi/v/sentinel-risk.svg?style=flat-square)](https://pypi.org/project/sentinel-risk/)
-[![NPM version](https://img.shields.io/npm/v/sentinel-mcp.svg?style=flat-square)](https://www.npmjs.com/package/sentinel-mcp)
+[![NPM version](https://img.shields.io/npm/v/sentinel-risk-mcp.svg?style=flat-square)](https://www.npmjs.com/package/sentinel-risk-mcp)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-296%20passing-brightgreen?style=flat-square)]()
@@ -128,7 +128,7 @@ This installs the `sentinel` CLI, the `sentinel-mcp` server binary, and all depe
 ### Option B — npx (zero-install MCP server only)
 
 ```bash
-npx sentinel-mcp
+npx sentinel-risk-mcp
 ```
 
 Runs the MCP server without any Python setup. Useful for connecting Claude Desktop to Sentinel without installing anything globally.
@@ -415,7 +415,7 @@ In Cursor settings → MCP Servers → Add:
   "mcpServers": {
     "sentinel": {
       "command": "npx",
-      "args": ["sentinel-mcp"]
+      "args": ["-y", "sentinel-risk-mcp"]
     }
   }
 }
@@ -424,7 +424,7 @@ In Cursor settings → MCP Servers → Add:
 ### Testing with MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector sentinel-mcp
+npx @modelcontextprotocol/inspector sentinel-risk-mcp
 ```
 
 Open the URL shown in the terminal, select the `sentinel` server, and call `get_deployment_risk` interactively.
@@ -515,7 +515,7 @@ sentinalScan/
 │   └── ...                    # one file per module
 │
 ├── pyproject.toml             # Package metadata + entry points
-├── package.json               # npm wrapper for npx sentinel-mcp
+├── package.json               # npm wrapper for npx sentinel-risk-mcp
 └── .env.example               # Template for LLM configuration
 ```
 
@@ -607,7 +607,7 @@ npm login
 npm publish --access public
 ```
 
-The npm package installs `sentinel-risk` via pip automatically and provides the `npx sentinel-mcp` entrypoint. See `package.json` and `bin/sentinel-mcp.js` for details.
+The npm package installs `sentinel-risk` via pip automatically and provides the `npx sentinel-risk-mcp` entrypoint. See `package.json` and `bin/sentinel-mcp.js` for details.
 
 ---
 

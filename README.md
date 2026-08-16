@@ -7,7 +7,6 @@
 Sentinel answers from your repository's own bug history — not a language model's guess.
 
 [![PyPI version](https://img.shields.io/pypi/v/sentinel-risk.svg?style=flat-square)](https://pypi.org/project/sentinel-risk/)
-[![npm version](https://img.shields.io/npm/v/sentinel-risk-mcp.svg?style=flat-square)](https://www.npmjs.com/package/sentinel-risk-mcp)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square)
@@ -102,36 +101,26 @@ Design principles baked into the code:
 
 **Requirements:** Python **3.11+**, and `git` on your PATH.
 
-### Option A — pip (recommended)
+### pip install (recommended)
 
 ```bash
 pip install sentinel-risk
 ```
 
-Installs the `sentinel` CLI (`scan`, `diff`, `train`, `evaluate`, `explain`), the `sentinel-mcp` server binary, and all dependencies (`lightgbm`, `pydriller`, `GitPython`, `lizard`, `networkx`, `shap`, `rich`, `fastmcp`, …). **This is the direct route to the `sentinel scan` command.**
+Installs everything in one step:
+
+- The `sentinel` CLI — `sentinel scan`, `sentinel diff`, `sentinel train`, `sentinel evaluate`, `sentinel explain`
+- The `sentinel-mcp` binary — starts the MCP server for Claude Desktop, Cursor, VS Code, and any other MCP client
+- All runtime dependencies (`lightgbm`, `pydriller`, `GitPython`, `lizard`, `networkx`, `shap`, `rich`, `fastmcp`, …)
+
+No Node.js or npm required.
+
+#### 💡 Zero-Path Alternative (Runs Everywhere)
+If your terminal does not have Python's scripts folder on your `PATH` environment variable, you can run them directly as Python modules:
+* For the **CLI**: `python -m sentinel <command>` (e.g. `python -m sentinel scan`)
+* For the **MCP server**: `python -m mcp_server`
 
 📦 [`sentinel-risk` on PyPI](https://pypi.org/project/sentinel-risk/)
-
-### Option B — npm (for the MCP server)
-
-For wiring Sentinel into Claude Desktop or Cursor without setting up Python yourself. The published package is **`sentinel-risk-mcp`**.
-
-Zero-install — always runs the latest:
-
-```bash
-npx -y sentinel-risk-mcp
-```
-
-Or install it globally and run the command:
-
-```bash
-npm install -g sentinel-risk-mcp
-sentinel-risk-mcp
-```
-
-The Node wrapper locates Python and installs the underlying `sentinel-risk` package via `pip` behind the scenes, then starts the MCP server. That bootstrap also places the `sentinel` CLI on your PATH — so `sentinel scan` works afterwards too — but if the CLI is all you want, `pip install sentinel-risk` (Option A) is the cleaner path.
-
-📦 [`sentinel-risk-mcp` on npm](https://www.npmjs.com/package/sentinel-risk-mcp)
 
 ---
 
@@ -520,21 +509,30 @@ Edit `claude_desktop_config.json`
 }
 ```
 
-**Zero-install (npx):**
-
+**Alternative (Runs everywhere without PATH issues):**
 ```json
 {
   "mcpServers": {
-    "sentinel": { "command": "npx", "args": ["-y", "sentinel-risk-mcp"] }
+    "sentinel": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "env": { "NVIDIA_API_KEY": "nvapi-your-key-here" }
+    }
   }
 }
 ```
 
-> If Claude can't find `sentinel-mcp`, GUI apps may not inherit your shell PATH — use the absolute path (Windows: `...\Scripts\sentinel-mcp.exe`; macOS/Linux: `~/.local/bin/sentinel-mcp`).
+> **Tip:** GUI apps (Claude Desktop, Cursor, VS Code) may not inherit your shell PATH. If `sentinel-mcp` isn't found, you can use the `python -m mcp_server` alternative above, or use the absolute path:
+> - **Windows:** `C:\Users\<you>\AppData\Roaming\Python\Python313\Scripts\sentinel-mcp.exe` (or wherever pip installed it)
+> - **macOS/Linux:** `~/.local/bin/sentinel-mcp`
 
 ### Cursor
 
-Settings → MCP → Add: name `sentinel`, command `sentinel-mcp`. Status turns green when connected.
+Settings → MCP → Add:
+* Name: `sentinel`
+* Type: `command`
+* Command: `sentinel-mcp` (or `python -m mcp_server`)
+
 
 ### Remote HTTP / SSE (teams)
 
@@ -549,7 +547,11 @@ fastmcp run mcp_server/server.py --transport sse --port 8000
 ### Test it with the Inspector
 
 ```bash
+# Using the global command:
 npx @modelcontextprotocol/inspector sentinel-mcp
+
+# Or via python -m (no PATH setup required):
+npx @modelcontextprotocol/inspector python -m mcp_server
 ```
 
 Open the printed URL, pick the `sentinel` server, and call `get_deployment_risk` interactively.
@@ -704,10 +706,8 @@ sentinalScan/
 │   └── config.py              # Every setting + tunable number (only env reader)
 ├── mcp_server/server.py       # FastMCP wrapper — one tool, delegates to sentinel/
 ├── github-action/             # Composite action + example workflow
-├── bin/sentinel-mcp.js        # npm wrapper (auto-installs sentinel-risk via pip)
 ├── tests/                     # One test file per module
-├── pyproject.toml             # Package metadata + entry points
-└── package.json               # npm wrapper metadata
+└── pyproject.toml             # Package metadata + console-script entry points
 ```
 
 **Data flow (scan):**

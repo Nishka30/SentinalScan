@@ -687,7 +687,7 @@ The core library imports **neither** `typer` nor `rich` and **never** touches th
 
 ```
 sentinalScan/
-├── sentinel/                  # Core library — no terminal, no network
+├── sentinel/                  # Core library - no terminal, no network
 │   ├── analysis.py            # Orchestrator → AnalysisResult
 │   ├── git_reader.py          # Low-level git (GitPython); default-branch + merge-base
 │   ├── commit_log.py          # git log --numstat walk (+ rename tracking)
@@ -794,14 +794,14 @@ No. It receives a frozen result and returns prose with no score field. It's a st
 
 ## 📖 Glossary
 
-- **SZZ** — the algorithm that links a bug-fixing commit back to the commit that introduced the bug, via line-level blame.
-- **Blast radius** — the set of files that (transitively) depend on what you changed.
-- **Hot file** — a file with an unusually high count of past bug fixes for this repo.
-- **Churn** — how often a file changes, independent of bugs.
-- **Ownership** — an author's share of a file's past commits.
-- **Cyclomatic complexity (CCN)** — the number of independent paths through a function; more paths, more places to hide a bug.
-- **PR-AUC** — area under the precision-recall curve; the right metric when positives are rare.
-- **Band** — the low/medium/high bucket a score falls into.
+- **SZZ** - the algorithm that links a bug-fixing commit back to the commit that introduced the bug, via line-level blame.
+- **Blast radius** - the set of files that (transitively) depend on what you changed.
+- **Hot file** - a file with an unusually high count of past bug fixes for this repo.
+- **Churn** - how often a file changes, independent of bugs.
+- **Ownership** - an author's share of a file's past commits.
+- **Cyclomatic complexity (CCN)** - the number of independent paths through a function; more paths, more places to hide a bug.
+- **PR-AUC** - area under the precision-recall curve; the right metric when positives are rare.
+- **Band** - the low/medium/high bucket a score falls into.
 
 ---
 
